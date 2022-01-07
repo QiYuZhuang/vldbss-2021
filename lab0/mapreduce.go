@@ -114,7 +114,7 @@ func (c *MRCluster) worker() {
 				// them into the destination file directly so that users can get
 				// results formatted as what they want.
 				inter_results := map[string][]string{}
-				results := map[string]string{}
+				results := []string{}
 				for i := 0; i < t.nMap; i++ {
 					rpath := reduceName(t.dataDir, t.jobName, i, t.taskNumber)
 					content, err := ioutil.ReadFile(rpath)
@@ -122,25 +122,30 @@ func (c *MRCluster) worker() {
 						log.Printf("[INFO] Not found reduce file %v-%v", i, t.taskNumber)
 						panic(err)
 					}
+					if len(content) == 0 {
+						continue
+					}
 					lines := strings.Split(string(content), "\n")
-					// log.Println("[INFO] line 0 in map task, ", lines[0])
+
 					// TODO
 					var kvs KeyValue
 					for j := 0; j < len(lines); j++ {
-						err = json.NewDecoder(strings.NewReader(lines[j])).Decode(&kvs)
-						inter_results[kvs.Key] = append(inter_results[kvs.Key], kvs.Value)
+						if len(lines[j]) != 0 {
+							err = json.NewDecoder(strings.NewReader(lines[j])).Decode(&kvs)
+							inter_results[kvs.Key] = append(inter_results[kvs.Key], kvs.Value)
+						}
 					}
+					// fmt.Printf("[INFO] inter result, i: %v, value: %v\n", i, len(inter_results[kvs.Key]))
 				}
 				opath := mergeName(t.dataDir, t.jobName, t.taskNumber)
 				fs, bs := CreateFileAndBuf(opath)
 				for k, v := range inter_results {
-					results[k] = t.reduceF(k, v)
+					results = append(results, t.reduceF(k, v))
 				}
-				for k, v := range results {
-					enc := json.NewEncoder(bs)
-					if err := enc.Encode(KeyValue{Key: k, Value: v}); err != nil {
-						log.Fatalln(err)
-					}
+
+				for _, v := range results {
+					// fmt.Printf("[INFO] result: %s\n", v)
+					bs.WriteString(v)
 				}
 				SafeClose(fs, bs)
 				// panic("YOUR CODE HERE")
@@ -199,44 +204,53 @@ func (c *MRCluster) run(jobName, dataDir string, mapF MapF, reduceF ReduceF, map
 			phase:      reducePhase,
 			taskNumber: i,
 			nReduce:    nReduce,
+			nMap:       nMap,
 			reduceF:    reduceF,
 		}
 		t.wg.Add(1)
 		reduce_task = append(reduce_task, t)
 		go func() { c.taskCh <- t }()
 	}
-	for _, t := range tasks {
+	for _, t := range reduce_task {
 		t.wg.Wait()
 	}
 	// 2. collect result and generate the final result
-	med_results := map[string]int{}
+	// med_results := map[string]int{}
+	result := []string{}
 	for i := 0; i < nReduce; i++ {
 		opath := mergeName(dataDir, jobName, i)
-		content, err := ioutil.ReadFile(opath)
-		if err != nil {
-			log.Printf("[INFO] Not found reduce output file %v", i)
-			panic(err)
-		}
-		lines := strings.Split(string(content), "\n")
-		// log.Println("[INFO] line 0 in map task, ", lines[0])
-		// TODO
-		for j := 0; j < len(lines); j++ {
-			str_kv := strings.Split(lines[j], " ")
-			tmp, err := strconv.Atoi(str_kv[1])
-			if err != nil {
-				panic(err)
-			}
-			med_results[str_kv[0]] += tmp
-		}
+		result = append(result, opath)
+		// content, err := ioutil.ReadFile(opath)
+		// if err != nil {
+		// 	log.Printf("[INFO] Not found reduce output file %v\n", i)
+		// 	panic(err)
+		// }
+		// // fmt.Printf("[INFO] len of content, %v\n", len(content))
+		// if len(content) == 0 {
+		// 	continue
+		// }
+		// lines := strings.Split(string(content), "\n")
+		// // log.Println("[INFO] line 0 in map task, ", lines[0])
+		// // TODO
+		// for j := 0; j < len(lines); j++ {
+		// 	if len(lines[j]) != 0 {
+		// 		str_kv := strings.Split(lines[j], " ")
+		// 		tmp, err := strconv.Atoi(str_kv[1])
+		// 		if err != nil {
+		// 			panic(err)
+		// 		}
+		// 		med_results[str_kv[0]] += tmp
+		// 	}
+		// }
 	}
 
-	result := []string{}
-	// 3. put into the notify chan
-	for k, v := range med_results {
-		result = append(result, k+" "+strconv.Itoa(v))
-	}
+	// // 3. put into the notify chan
+	// for k, v := range med_results {
+	// 	result = append(result, k+" "+strconv.Itoa(v))
+	// }
+	// // fmt.Printf("[INFO] final result %s\n", result[0])
 	notify <- result
-	// panic("YOUR CODE HERE")
+	// // panic("YOUR CODE HERE")
 }
 
 func ihash(s string) int {
