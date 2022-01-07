@@ -10,6 +10,7 @@ import (
 	"path"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -112,7 +113,37 @@ func (c *MRCluster) worker() {
 				// hint: don't encode results returned by ReduceF, and just output
 				// them into the destination file directly so that users can get
 				// results formatted as what they want.
-				panic("YOUR CODE HERE")
+				inter_results := map[string][]string{}
+				results := map[string]string{}
+				for i := 0; i < t.nMap; i++ {
+					rpath := reduceName(t.dataDir, t.jobName, i, t.taskNumber)
+					content, err := ioutil.ReadFile(rpath)
+					if err != nil {
+						log.Printf("[INFO] Not found reduce file %v-%v", i, t.taskNumber)
+						panic(err)
+					}
+					lines := strings.Split(string(content), "\n")
+					// log.Println("[INFO] line 0 in map task, ", lines[0])
+					// TODO
+					var kvs KeyValue
+					for j := 0; j < len(lines); j++ {
+						err = json.NewDecoder(strings.NewReader(lines[j])).Decode(&kvs)
+						inter_results[kvs.Key] = append(inter_results[kvs.Key], kvs.Value)
+					}
+				}
+				opath := mergeName(t.dataDir, t.jobName, t.taskNumber)
+				fs, bs := CreateFileAndBuf(opath)
+				for k, v := range inter_results {
+					results[k] = t.reduceF(k, v)
+				}
+				for k, v := range results {
+					enc := json.NewEncoder(bs)
+					if err := enc.Encode(KeyValue{Key: k, Value: v}); err != nil {
+						log.Fatalln(err)
+					}
+				}
+				SafeClose(fs, bs)
+				// panic("YOUR CODE HERE")
 			}
 			t.wg.Done()
 		case <-c.exit:
@@ -159,7 +190,53 @@ func (c *MRCluster) run(jobName, dataDir string, mapF MapF, reduceF ReduceF, map
 
 	// reduce phase
 	// YOUR CODE HERE :D
-	panic("YOUR CODE HERE")
+	// 1. run reduce function
+	reduce_task := make([]*task, 0, nReduce)
+	for i := 0; i < nReduce; i++ {
+		t := &task{
+			dataDir:    dataDir,
+			jobName:    jobName,
+			phase:      reducePhase,
+			taskNumber: i,
+			nReduce:    nReduce,
+			reduceF:    reduceF,
+		}
+		t.wg.Add(1)
+		reduce_task = append(reduce_task, t)
+		go func() { c.taskCh <- t }()
+	}
+	for _, t := range tasks {
+		t.wg.Wait()
+	}
+	// 2. collect result and generate the final result
+	med_results := map[string]int{}
+	for i := 0; i < nReduce; i++ {
+		opath := mergeName(dataDir, jobName, i)
+		content, err := ioutil.ReadFile(opath)
+		if err != nil {
+			log.Printf("[INFO] Not found reduce output file %v", i)
+			panic(err)
+		}
+		lines := strings.Split(string(content), "\n")
+		// log.Println("[INFO] line 0 in map task, ", lines[0])
+		// TODO
+		for j := 0; j < len(lines); j++ {
+			str_kv := strings.Split(lines[j], " ")
+			tmp, err := strconv.Atoi(str_kv[1])
+			if err != nil {
+				panic(err)
+			}
+			med_results[str_kv[0]] += tmp
+		}
+	}
+
+	result := []string{}
+	// 3. put into the notify chan
+	for k, v := range med_results {
+		result = append(result, k+" "+strconv.Itoa(v))
+	}
+	notify <- result
+	// panic("YOUR CODE HERE")
 }
 
 func ihash(s string) int {
