@@ -35,19 +35,28 @@ func URLTop10(nWorkers int) RoundsArgs {
 func URLCountMap(filename string, contents string) []KeyValue {
 	lines := strings.Split(contents, "\n")
 	kvs := make([]KeyValue, 0, len(lines))
+	kvm := map[string]int{}
 	for _, l := range lines {
 		l = strings.TrimSpace(l)
 		if len(l) == 0 {
 			continue
 		}
-		kvs = append(kvs, KeyValue{Key: l})
+		kvm[l]++
+	}
+	for k, v := range kvm {
+		kvs = append(kvs, KeyValue{Key: k, Value: strconv.Itoa(v)})
 	}
 	return kvs
 }
 
 // URLCountReduce is the reduce function in the first round
 func URLCountReduce(key string, values []string) string {
-	return fmt.Sprintf("%s %s\n", key, strconv.Itoa(len(values)))
+	var sum int
+	for _, v := range values {
+		tmp, _ := strconv.Atoi(v)
+		sum += tmp
+	}
+	return fmt.Sprintf("%s %s\n", key, strconv.Itoa(sum))
 }
 
 // URLTop10MapLocal is the map function in the second round
